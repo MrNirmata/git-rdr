@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # 1. მონაცემთა ბაზა
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescaledb
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=crypto_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database_data:/var/lib/postgresql/data
+
+  # 2. შეტყობინებების სერვერი
+  nats:
+    image: nats:latest
+    container_name: nats
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  # 3. Backend სერვისები (Go)
+  ingestor:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ingestor
+    command: ["./ingestor"]
+    depends_on:
+      - nats
+    restart: unless-stopped
+
+  archiver:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: archiver
+    command: ["./archiver"]
+    depends_on:
+      - nats
+      - timescaledb
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: api
+    command: ["./api"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      - nats
+      - timescaledb
+    restart: unless-stopped
+
+  # --- ახალი სერვისი Order Book-ის სამართავად ---
+  orderbook_manager:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: orderbook_manager
+    command: ["./orderbook_manager"]
+    ports:
+      - "8081:8081" # ვხსნით პორტს, რათა frontend-მა შეძლოს დაკავშირება
+    depends_on:
+      - nats
+    restart: unless-stopped
+  # ------------------------------------------------
+
+  # 4. Frontend სერვისი (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+      - orderbook_manager # ვამატებთ დამოკიდებულებას, რათა სწორი თანმიმდევრობით გაეშვას
+
+volumes:
+  database_data:
